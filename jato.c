@@ -9,7 +9,7 @@
 
 #define MIN_SPEED 1.0f
 #define MAX_SPEED 4.0f
-
+#define FIXED_DT (1.0f / 60.0f)
 
 
 void draw_triangle(SDL_Renderer* renderer, Point p1, Point p2, Point p3);
@@ -32,26 +32,18 @@ bool show_fov = false;
 
 
 int main(int argc, char* argv[]) {
+
     if (argc < 7) {
         printf("Usage: %s <num_boids> <perception_radius> <fov_deg> <w_align> <w_cohesion> <w_separation>\n", argv[0]);
         return 1;
     }
 
-    TTF_Font* font;
-
-    if (TTF_Init() == -1) {
-        printf("TTF_Init: %s\n", TTF_GetError());
-        return 1;
-    }
-
-    font = TTF_OpenFont("DejaVuSans.ttf", 16);
-    if (!font) {
-        printf("Failed to load font: %s\n", TTF_GetError());
-        return 1;
-    }
     SDL_Init(SDL_INIT_VIDEO);
+    TTF_Init();
+
     int window_width = 1400;
     int window_height = 1000;
+
     SDL_Window* window = SDL_CreateWindow(
         "Boids",
         SDL_WINDOWPOS_CENTERED,
@@ -62,72 +54,91 @@ int main(int argc, char* argv[]) {
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
+    TTF_Font* font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16);
+
     int N = atoi(argv[1]);
     perception_radius = atof(argv[2]);
     fov_deg = atof(argv[3]);
-
     w_align = atof(argv[4]);
     w_cohesion = atof(argv[5]);
     w_separation = atof(argv[6]);
 
-    Boid* boids = malloc(N * sizeof(Boid));
-    initialize_boids(boids, N, window_width, window_height);
-    SDL_Event event;
+    Boid* boids = malloc(sizeof(Boid) * N);
+    Boid* neighbors = malloc(sizeof(Boid) * N);
 
-    Boid* neighbors = malloc(N * sizeof(Boid));
+    initialize_boids(boids, N, window_width, window_height);
     int random_boid_index = rand() % N;
 
-    char info[256];
-    Uint32 last_time = SDL_GetTicks();
-    Uint32 fps_last_time = SDL_GetTicks();
-    int frame_count = 0;
+    SDL_Event event;
+
+    /* TIMING */
+    Uint64 now = SDL_GetPerformanceCounter();
+    Uint64 last = now;
+    double accumulator = 0.0;
+
+    /* FPS */
+    int frames = 0;
     float fps = 0.0f;
-    char fps_text[64];
-
+    Uint32 fps_timer = SDL_GetTicks();
     while (running) {
-        Uint32 current_time = SDL_GetTicks();
-        float dt = (current_time - last_time) / 1000.0f;
-        last_time = current_time;
-        frame_count++;
-        //racunanje fps-a
-         if (current_time - fps_last_time >= 1000) {
-            fps = frame_count / ((current_time - fps_last_time) / 1000.0f);
-            frame_count = 0;
-            fps_last_time = current_time;
-        }
+
+        now = SDL_GetPerformanceCounter();
+        double frameTime = (double)(now - last) / SDL_GetPerformanceFrequency();
+        last = now;
+        accumulator += frameTime;
+
+        /* INPUT */
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT)
-                running = false;
+            if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN)
-            handle_keyDown(event.key.keysym.sym);
+                handle_keyDown(event.key.keysym.sym);
         }
 
-        // clear screen
+        /* FIXED UPDATE */
+        while (accumulator >= FIXED_DT) {
+            for (int i = 0; i < N; i++) {
+                update_boid(&boids[i], boids, neighbors, N,
+                            window_width, window_height,
+                            perception_radius, fov_deg,
+                            w_align, w_cohesion, w_separation);
+            }
+            accumulator -= FIXED_DT;
+        }
+
+        /* RENDER */
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
 
         for (int i = 0; i < N; i++) {
-            update_boid(&boids[i], boids,neighbors, N, window_width, window_height,perception_radius,fov_deg,
-                        w_align, w_cohesion, w_separation);
             draw_boid(renderer, &boids[i], 10.0f);
-            if (i == random_boid_index && show_fov) {
+            if (i == random_boid_index && show_fov)
                 draw_fov(renderer, &boids[i], perception_radius, fov_deg);
-            }
         }
-        sprintf(info, "Align: %.1f Cohesion: %.1f Sep: %.1f FOV: %.1f Radius: %.1f",
+
+        char info[256];
+        snprintf(info, sizeof(info),
+            "Align %.2f | Cohesion %.2f | Sep %.2f | FOV %.0f | R %.0f",
             w_align, w_cohesion, w_separation, fov_deg, perception_radius);
+
         draw_text(renderer, font, info, 10, 10);
 
+        frames++;
+        if (SDL_GetTicks() - fps_timer >= 1000) {
+            fps = frames;
+            frames = 0;
+            fps_timer = SDL_GetTicks();
+        }
+
+        char fps_text[64];
         snprintf(fps_text, sizeof(fps_text), "FPS: %.0f", fps);
-        draw_text(renderer, font, fps_text, window_width - 150, window_height - 30);
+        draw_text(renderer, font, fps_text, window_width - 140, window_height - 30);
+
         SDL_RenderPresent(renderer);
-        //SDL_Delay(16);
     }
 
-    free(neighbors);
     free(boids);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+    free(neighbors);
+    TTF_Quit();
     SDL_Quit();
     return 0;
 }
