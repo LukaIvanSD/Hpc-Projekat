@@ -1,12 +1,19 @@
-# Compiler
-CC = gcc
+# Compilers
+CC   = gcc
+NVCC = nvcc
 
 # Target executable
 TARGET = jato.exe
 
 # Source files
-SRCS = jato.c boid.c
-OBJS = $(SRCS:.c=.o)
+C_SRCS  = jato.c boid.c
+CU_SRCS = boid_cuda.cu
+
+# Object files
+C_OBJS  = $(C_SRCS:.c=.o)
+CU_OBJS = $(CU_SRCS:.cu=.o)
+
+OBJS = $(C_OBJS) $(CU_OBJS)
 
 # SDL2 flags
 SDL_CFLAGS = $(shell sdl2-config --cflags)
@@ -16,21 +23,26 @@ SDL_LIBS   = $(shell sdl2-config --libs)
 TTF_LIBS = -lSDL2_ttf
 
 # Compiler flags
-CFLAGS = -Wall -Wextra -std=c11 -O2 $(SDL_CFLAGS)
+CFLAGS   = -Wall -Wextra -std=c11 -O2 $(SDL_CFLAGS)
+NVFLAGS  = -O2
 
 # Linker flags
-LDFLAGS = $(SDL_LIBS) $(TTF_LIBS) -lm
+LDFLAGS = $(SDL_LIBS) $(TTF_LIBS) -lm -lcudart
 
 # Default rule
 all: $(TARGET)
 
-# Link
+# Link (use nvcc!)
 $(TARGET): $(OBJS)
-	$(CC) $(OBJS) -o $(TARGET) $(LDFLAGS)
+	$(NVCC) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
-# Compile .c -> .o
+# Compile C files
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile CUDA files
+%.o: %.cu
+	$(NVCC) $(NVFLAGS) -c $< -o $@
 
 # Clean
 clean:

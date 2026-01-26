@@ -6,6 +6,7 @@
 #include <time.h>
 #include "boid.h"
 #include <SDL2/SDL_ttf.h>
+#include "boid_cuda.h"
 
 #define MIN_SPEED 1.0f
 #define MAX_SPEED 4.0f
@@ -20,6 +21,8 @@ void update_boid(Boid* b, Boid* boids,Boid* neighbors, int N, int width, int hei
 void draw_fov(SDL_Renderer* renderer, Boid* b, float perception_radius, float fov_deg);
 void draw_text(SDL_Renderer* renderer, TTF_Font* font, const char* text, int x, int y);
 void handle_keyDown(SDL_Keycode key);
+
+
 bool running = true;
 float w_align = 0.0f;
 float w_cohesion = 0.0f;
@@ -28,7 +31,7 @@ float fov_deg = 270.0f;
 float perception_radius = 50.0f;
 float delta = 0.1f, delta_angle = 5.0f, delta_radius = 5.0f;
 bool show_fov = false;
-
+bool is_sequential = false;
 
 
 int main(int argc, char* argv[]) {
@@ -63,10 +66,14 @@ int main(int argc, char* argv[]) {
     w_cohesion = atof(argv[5]);
     w_separation = atof(argv[6]);
 
-    Boid* boids = malloc(sizeof(Boid) * N);
-    Boid* neighbors = malloc(sizeof(Boid) * N);
+    Boid* boids;
+    Boid* neighbors = (Boid*)malloc(N * sizeof(Boid));
 
+    cuda_init_boids(&boids, N);
     initialize_boids(boids, N, window_width, window_height);
+    cuda_copy_boids_to_device(boids, N);
+    cuda_set_simulation_constants(window_width, window_height);
+
     int random_boid_index = rand() % N;
 
     SDL_Event event;
@@ -80,6 +87,10 @@ int main(int argc, char* argv[]) {
     int frames = 0;
     float fps = 0.0f;
     Uint32 fps_timer = SDL_GetTicks();
+
+    char fps_text[64];
+    char mode_text[64];
+    char info[256];
     while (running) {
 
         now = SDL_GetPerformanceCounter();
@@ -95,27 +106,33 @@ int main(int argc, char* argv[]) {
         }
 
         /* FIXED UPDATE */
-        while (accumulator >= FIXED_DT) {
-            for (int i = 0; i < N; i++) {
-                update_boid(&boids[i], boids, neighbors, N,
-                            window_width, window_height,
-                            perception_radius, fov_deg,
-                            w_align, w_cohesion, w_separation);
+        if (is_sequential) {
+            while (accumulator >= FIXED_DT) {
+                for (int i = 0; i < N; i++) {
+                    update_boid(&boids[i], boids, neighbors, N,
+                                window_width, window_height,
+                                perception_radius, fov_deg,
+                                w_align, w_cohesion, w_separation);
+                }
+                accumulator -= FIXED_DT;
             }
-            accumulator -= FIXED_DT;
+        } else {
+            while (accumulator >= FIXED_DT) {
+                cuda_update_boids(boids, N,
+                                  perception_radius, fov_deg,
+                                  w_align, w_cohesion, w_separation);
+                accumulator -= FIXED_DT;
+            }
         }
-
         /* RENDER */
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-
         for (int i = 0; i < N; i++) {
             draw_boid(renderer, &boids[i], 10.0f);
             if (i == random_boid_index && show_fov)
                 draw_fov(renderer, &boids[i], perception_radius, fov_deg);
         }
 
-        char info[256];
         snprintf(info, sizeof(info),
             "Align %.2f | Cohesion %.2f | Sep %.2f | FOV %.0f | R %.0f",
             w_align, w_cohesion, w_separation, fov_deg, perception_radius);
@@ -129,21 +146,23 @@ int main(int argc, char* argv[]) {
             fps_timer = SDL_GetTicks();
         }
 
-        char fps_text[64];
         snprintf(fps_text, sizeof(fps_text), "FPS: %.0f", fps);
         draw_text(renderer, font, fps_text, window_width - 140, window_height - 30);
+
+        snprintf(mode_text, sizeof(mode_text), "Mode: %s", is_sequential ? "CPU" : "CUDA");
+        draw_text(renderer, font, mode_text, window_width - 400, window_height - 30);
 
         SDL_RenderPresent(renderer);
     }
 
-    free(boids);
-    free(neighbors);
+    cuda_shutdown();
     TTF_Quit();
     SDL_Quit();
     return 0;
 }
+
 void draw_text(SDL_Renderer* renderer, TTF_Font* font, const char* text, int x, int y) {
-    SDL_Color color = {255, 255, 255, 255};
+    SDL_Color color = {0, 255, 255, 255};
     SDL_Surface* surface = TTF_RenderText_Solid(font, text, color);
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
 
@@ -178,6 +197,7 @@ void handle_keyDown(SDL_Keycode key) {
                 case SDLK_r: perception_radius += delta_radius; break;
                 case SDLK_f: perception_radius -= delta_radius; break;
                 case SDLK_c: show_fov = !show_fov; break;
+                case SDLK_t: is_sequential = !is_sequential; break;
                 default:
                     break;
             }
