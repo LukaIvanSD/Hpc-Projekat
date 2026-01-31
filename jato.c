@@ -6,6 +6,8 @@
 #include <time.h>
 #include "boid.h"
 #include <SDL2/SDL_ttf.h>
+#include <omp.h>
+
 #include "boid_cuda.h"
 
 #define MIN_SPEED 1.0f
@@ -16,7 +18,7 @@
 void draw_triangle(SDL_Renderer* renderer, Point p1, Point p2, Point p3);
 void draw_boid(SDL_Renderer* renderer, Boid* b, float size);
 void initialize_boids(Boid* boids, int N, int width, int height);
-void update_boid(Boid* b, Boid* boids,Boid* neighbors, int N, int width, int height,float perception_radius, float fov_deg,
+void update_boid(Boid* b, Boid* boids, int N, int width, int height,float perception_radius, float fov_deg,
                  float w_align, float w_cohesion, float w_separation);
 void draw_fov(SDL_Renderer* renderer, Boid* b, float perception_radius, float fov_deg);
 void draw_text(SDL_Renderer* renderer, TTF_Font* font, const char* text, int x, int y);
@@ -32,6 +34,7 @@ float perception_radius = 50.0f;
 float delta = 0.1f, delta_angle = 5.0f, delta_radius = 5.0f;
 bool show_fov = false;
 bool is_sequential = false;
+bool is_openMP = false;
 
 
 int main(int argc, char* argv[]) {
@@ -67,8 +70,6 @@ int main(int argc, char* argv[]) {
     w_separation = atof(argv[6]);
 
     Boid* boids;
-    Boid* neighbors = (Boid*)malloc(N * sizeof(Boid));
-
     cuda_init_boids(&boids, N);
     initialize_boids(boids, N, window_width, window_height);
     cuda_copy_boids_to_device(boids, N);
@@ -98,25 +99,37 @@ int main(int argc, char* argv[]) {
         last = now;
         accumulator += frameTime;
 
-        /* INPUT */
+        // input
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) running = false;
             if (event.type == SDL_KEYDOWN)
                 handle_keyDown(event.key.keysym.sym);
         }
 
-        /* FIXED UPDATE */
         if (is_sequential) {
-            while (accumulator >= FIXED_DT) {
+            if (is_openMP){
+                while (accumulator >= FIXED_DT) {
+                #pragma omp parallel for schedule(dynamic)
                 for (int i = 0; i < N; i++) {
-                    update_boid(&boids[i], boids, neighbors, N,
+                    update_boid(&boids[i], boids, N,
                                 window_width, window_height,
                                 perception_radius, fov_deg,
                                 w_align, w_cohesion, w_separation);
+                    }
+                accumulator -= FIXED_DT;
+                }
+            }
+            else{
+                while (accumulator >= FIXED_DT) {
+                    for (int i = 0; i < N; i++) {
+                        update_boid(&boids[i], boids, N,
+                                    window_width, window_height,
+                                    perception_radius, fov_deg,
+                                    w_align, w_cohesion, w_separation);
                 }
                 accumulator -= FIXED_DT;
             }
-        } else {
+        }} else {
             while (accumulator >= FIXED_DT) {
                 cuda_update_boids(boids, N,
                                   perception_radius, fov_deg,
@@ -149,7 +162,7 @@ int main(int argc, char* argv[]) {
         snprintf(fps_text, sizeof(fps_text), "FPS: %.0f", fps);
         draw_text(renderer, font, fps_text, window_width - 140, window_height - 30);
 
-        snprintf(mode_text, sizeof(mode_text), "Mode: %s", is_sequential ? "CPU" : "CUDA");
+        snprintf(mode_text, sizeof(mode_text), "Mode: %s", is_sequential ? is_openMP ? "openMP": "Sequential"  : "CUDA");
         draw_text(renderer, font, mode_text, window_width - 400, window_height - 30);
 
         SDL_RenderPresent(renderer);
@@ -198,6 +211,7 @@ void handle_keyDown(SDL_Keycode key) {
                 case SDLK_f: perception_radius -= delta_radius; break;
                 case SDLK_c: show_fov = !show_fov; break;
                 case SDLK_t: is_sequential = !is_sequential; break;
+                case SDLK_y: is_openMP = !is_openMP; break;
                 default:
                     break;
             }
@@ -256,12 +270,12 @@ void initialize_boids(Boid* boids, int N, int width, int height) {
     }
 }
 
-void update_boid(Boid* b, Boid* boids, Boid* neighbors, int N, int width, int height,
+void update_boid(Boid* b, Boid* boids, int N, int width, int height,
                  float perception_radius, float fov_deg,
                  float w_align, float w_cohesion, float w_separation) {
 
     // ažuriranje pozicije na osnovu pravila jata
-    update_boid_position(b, boids,neighbors, N, perception_radius, fov_deg, w_align, w_cohesion, w_separation);
+    update_boid_position(b, boids, N, perception_radius, fov_deg, w_align, w_cohesion, w_separation);
 
     // wrapping oko ivica ekrana
     if (b->position.x < 0) b->position.x += width;

@@ -130,12 +130,13 @@ __global__ void update_boids_kernel(Boid* boids, int N,
                                     float w_align, float w_cohesion, float w_separation)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+    Boid b = boids[i];
     if (i >= N) return;
 
-    update_boid_position_device(&boids[i], boids, N,
+    update_boid_position_device(&b, boids, N,
                                 perception_radius, fov_deg,
                                 w_align, w_cohesion, w_separation);
-
+    boids[i] = b;
 }
 
 
