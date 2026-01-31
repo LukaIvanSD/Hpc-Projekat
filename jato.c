@@ -35,6 +35,8 @@ float delta = 0.1f, delta_angle = 5.0f, delta_radius = 5.0f;
 bool show_fov = false;
 bool is_sequential = false;
 bool is_openMP = false;
+bool is_cuda_grid = false;
+float initial_perception_radius;
 
 
 int main(int argc, char* argv[]) {
@@ -47,7 +49,7 @@ int main(int argc, char* argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
 
-    int window_width = 1400;
+    int window_width = 1900;
     int window_height = 1000;
 
     SDL_Window* window = SDL_CreateWindow(
@@ -68,13 +70,13 @@ int main(int argc, char* argv[]) {
     w_align = atof(argv[4]);
     w_cohesion = atof(argv[5]);
     w_separation = atof(argv[6]);
+    initial_perception_radius = perception_radius;
 
     Boid* boids;
+    cuda_set_simulation_constants(window_width, window_height, perception_radius);
     cuda_init_boids(&boids, N);
     initialize_boids(boids, N, window_width, window_height);
     cuda_copy_boids_to_device(boids, N);
-    cuda_set_simulation_constants(window_width, window_height);
-
     int random_boid_index = rand() % N;
 
     SDL_Event event;
@@ -130,6 +132,14 @@ int main(int argc, char* argv[]) {
                 accumulator -= FIXED_DT;
             }
         }} else {
+            if (is_cuda_grid) {
+                while (accumulator >= FIXED_DT) {
+                cuda_update_optimized_boids(boids, N,
+                                  perception_radius, fov_deg,
+                                  w_align, w_cohesion, w_separation);
+                accumulator -= FIXED_DT;
+            }
+            }
             while (accumulator >= FIXED_DT) {
                 cuda_update_boids(boids, N,
                                   perception_radius, fov_deg,
@@ -162,7 +172,7 @@ int main(int argc, char* argv[]) {
         snprintf(fps_text, sizeof(fps_text), "FPS: %.0f", fps);
         draw_text(renderer, font, fps_text, window_width - 140, window_height - 30);
 
-        snprintf(mode_text, sizeof(mode_text), "Mode: %s", is_sequential ? is_openMP ? "openMP": "Sequential"  : "CUDA");
+        snprintf(mode_text, sizeof(mode_text), "Mode: %s", is_sequential ? is_openMP ? "openMP": "Sequential"  : is_cuda_grid ? "CUDA Grid" : "CUDA");
         draw_text(renderer, font, mode_text, window_width - 400, window_height - 30);
 
         SDL_RenderPresent(renderer);
@@ -207,11 +217,18 @@ void handle_keyDown(SDL_Keycode key) {
                 case SDLK_e: fov_deg -= delta_angle; break;
 
                 // Perception radius
-                case SDLK_r: perception_radius += delta_radius; break;
+
+                case SDLK_r:
+                    perception_radius += delta_radius;
+                    if (perception_radius > 2.0f * initial_perception_radius) {
+                        perception_radius = 2.0f * initial_perception_radius;
+                    }
+                    break;
                 case SDLK_f: perception_radius -= delta_radius; break;
                 case SDLK_c: show_fov = !show_fov; break;
                 case SDLK_t: is_sequential = !is_sequential; break;
                 case SDLK_y: is_openMP = !is_openMP; break;
+                case SDLK_u: is_cuda_grid = !is_cuda_grid; break;
                 default:
                     break;
             }
